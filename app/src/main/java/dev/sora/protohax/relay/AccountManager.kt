@@ -1,90 +1,36 @@
 package dev.sora.protohax.relay
 
-import com.google.gson.*
-import com.google.gson.annotations.SerializedName
-import dev.sora.protohax.MyApplication
-import dev.sora.protohax.util.ContextUtils.readString
-import dev.sora.protohax.util.ContextUtils.writeString
-import dev.sora.relay.session.listener.xbox.XboxDeviceInfo
-import java.io.File
-import java.lang.reflect.Type
+import org.cloudburstmc.protocol.bedrock.packet.BedrockPacket
+import org.cloudburstmc.protocol.bedrock.packet.LoginPacket
+import org.cloudburstmc.protocol.bedrock.packet.PlayerAuthInputPacket
+import org.cloudburstmc.protocol.bedrock.packet.StartGamePacket
+import org.cloudburstmc.protocol.bedrock.util.EncryptionUtils
+import java.util.UUID
 
-object AccountManager {
+@Suppress("MemberVisibilityCanBePrivate")
+class LocalPlayer : Player(0L, 0L, UUID.randomUUID(), "") {
 
-    private const val KEY_CURRENT_MICROSOFT_REFRESH_TOKEN = "MICROSOFT_REFRESH_TOKEN"
+    override var runtimeEntityId: Long = 0L
+        private set
 
-    val accounts = mutableListOf<Account>()
-    private var currentRefreshToken: String?
-        get() = MyApplication.instance.readString(KEY_CURRENT_MICROSOFT_REFRESH_TOKEN)?.ifEmpty { null }
-        set(value) = MyApplication.instance.writeString(KEY_CURRENT_MICROSOFT_REFRESH_TOKEN, value ?: "")
-    var currentAccount: Account?
-        get() = currentRefreshToken?.let { t -> accounts.find { it.refreshToken == t } }
-        set(value) { if (value == null) currentRefreshToken = null else if (accounts.contains(value)) currentRefreshToken = value.refreshToken }
+    override var uniqueEntityId: Long = 0L
+        private set
 
-    private val storeFile = File(MyApplication.instance.filesDir, "credentials.json")
-    private val gson = GsonBuilder()
-        .registerTypeAdapter(XboxDeviceInfo::class.java, DeviceInfoAdapter())
-        .create()
+    override var uuid: UUID = UUID.randomUUID()
+        private set
 
-    init {
-        load()
-    }
-
-    fun load() {
-        accounts.clear()
-        if (!storeFile.exists()) {
-            currentRefreshToken = null
-            return
+    override fun onReceived(packet: BedrockPacket): Boolean {
+        super.onReceived(packet)
+        if (packet is StartGamePacket) {
+            runtimeEntityId = packet.runtimeEntityId
+            uniqueEntityId = packet.uniqueEntityId
         }
-        accounts.addAll(gson.fromJson(storeFile.reader(Charsets.UTF_8), Array<Account>::class.java))
-        // clean up current refresh token from legacy version
-        cleanupCurrentRefreshToken()
+        return false
     }
 
-    fun save() {
-        storeFile.writeText(gson.toJson(accounts.toTypedArray(), Array<Account>::class.java))
+    override fun onDisconnect(reason: String) {
+        super.onDisconnect(reason)
+        reset()
     }
 
-    private fun cleanupCurrentRefreshToken() {
-        val current = currentRefreshToken
-        accounts.forEach {
-            if (it.refreshToken == current) {
-                return
-            }
-        }
-        currentRefreshToken = null
-    }
-
-    private class DeviceInfoAdapter : JsonSerializer<XboxDeviceInfo>, JsonDeserializer<XboxDeviceInfo> {
-
-        override fun serialize(src: XboxDeviceInfo, typeOf: Type?, ctx: JsonSerializationContext?): JsonElement {
-            return JsonPrimitive(src.deviceType)
-        }
-
-        override fun deserialize(json: JsonElement, typeOf: Type?, ctx: JsonDeserializationContext?): XboxDeviceInfo {
-            return XboxDeviceInfo.devices[json.asString] ?: XboxDeviceInfo.DEVICE_ANDROID
-        }
-    }
-}
-
-class Account(
-    @SerializedName("remark") var remark: String,
-    @SerializedName("device") val platform: XboxDeviceInfo,
-    @SerializedName("refresh_token") var refreshToken: String
-) {
-
-    /**
-     * @return accessToken
-     */
-    fun refresh(): String {
-        val isCurrent = AccountManager.currentAccount == this
-		val (accessToken, refreshToken) = platform.refreshToken(refreshToken)
-        this.refreshToken = refreshToken
-        if (isCurrent) {
-            // refreshes the token field
-            AccountManager.currentAccount = this
-        }
-        AccountManager.save()
-        return accessToken
-    }
 }
